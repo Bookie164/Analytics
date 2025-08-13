@@ -56,7 +56,7 @@ def load_data():
     """Load and preprocess the customer data"""
     try:
         # Try to load the data
-        file_id = 1mdu2tYaGP-LWwl5kT7QSGy6dk3PYRNBI
+        file_id = "1mdu2tYaGP-LWwl5kT7QSGy6dk3PYRNBI"
       #  data_path = 'https://drive.google.com/file/d/1mdu2tYaGP-LWwl5kT7QSGy6dk3PYRNBI/view?usp=share_link'
         data_path = f"https://drive.google.com/uc?id={file_id}"
         customer_data = pd.read_parquet(data_path)
