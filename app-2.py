@@ -3,17 +3,19 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-from sklearn.preprocessing import StandardScaler, OneHotEncoder
-from sklearn.cluster import KMeans
-from sklearn.metrics import silhouette_score
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score
+import warnings
+warnings.filterwarnings('ignore')
 
-# Set page config
+# Configure Streamlit page
 st.set_page_config(
-    page_title="Customer Segmentation Analysis",
-    page_icon="📊",
+    page_title="E-Commerce Customer Segmentation",
+    page_icon="🛒",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -28,580 +30,601 @@ st.markdown("""
         margin-bottom: 2rem;
     }
     .section-header {
-        font-size: 1.5rem;
+        font-size: 2rem;
         color: #ff7f0e;
         margin-top: 2rem;
         margin-bottom: 1rem;
     }
-    .metric-card {
+    .metric-container {
         background-color: #f0f2f6;
         padding: 1rem;
         border-radius: 0.5rem;
-        margin: 0.5rem;
+        margin: 0.5rem 0;
+    }
+    .cluster-profile {
+        background-color: #e8f4f8;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        border-left: 4px solid #1f77b4;
+        margin: 0.5rem 0;
     }
 </style>
 """, unsafe_allow_html=True)
 
-def load_and_preprocess_data():
+@st.cache_data
+def load_data():
     """Load and preprocess the customer data"""
     try:
-        # Try to load the data from the workspace
-        data_path = 'https://drive.google.com/file/d/1mdu2tYaGP-LWwl5kT7QSGy6dk3PYRNBI/view?usp=share_link'
-        data = pd.read_parquet(data_path)
-        return data
-    except:
-        # If file not found, return None
+        # Try to load the data
+        data_path = './mytestdata.parquet'
+        customer_data = pd.read_parquet(data_path)
+        
+        # Data preprocessing
+        def fill_missing_brand(group):
+            if group['brand'].notna().any():
+                group['brand'] = group['brand'].fillna(method='ffill').fillna(method='bfill')
+            return group
+        
+        customer_data = customer_data.groupby('product_id').apply(fill_missing_brand).reset_index(drop=True)
+        customer_data = customer_data.dropna()
+        
+        return customer_data
+    except Exception as e:
+        st.error(f"Error loading data: {e}")
         return None
 
-def fill_missing_brand(group):
-    """Fill missing brand values using forward and backward fill"""
-    if group['brand'].notna().any():
-        group['brand'] = group['brand'].fillna(method='ffill').fillna(method='bfill')
-    return group
-
-def preprocess_data(data):
-    """Preprocess the data with brand filling"""
-    # Fill missing brand values
-    data = data.groupby('product_id').apply(fill_missing_brand).reset_index(drop=True)
-    return data
-
-def perform_visit_clustering(data, n_clusters=4):
-    """Perform clustering based on user visit frequency"""
-    # Group by user_id and count visits
-    user_visit_counts = data.groupby('user_id').size()
-    
-    # Scale the data
-    scaler = StandardScaler()
-    visit_counts_scaled = scaler.fit_transform(user_visit_counts.values.reshape(-1, 1))
-    
-    # K-means clustering
-    kmeans = KMeans(n_clusters=n_clusters, random_state=42)
-    clusters = kmeans.fit_predict(visit_counts_scaled)
-    
-    # Create results dataframe
-    user_clusters = pd.DataFrame({
-        'user_id': user_visit_counts.index,
-        'visit_count': user_visit_counts.values,
-        'cluster': clusters
-    })
-    
-    return user_clusters, kmeans
-
-def perform_price_clustering(data, n_clusters=4):
-    """Perform clustering based on average price per user"""
-    # Calculate average price per user
-    user_avg_price = data.groupby('user_id')['price'].mean()
-    
-    # Scale the data
-    scaler = StandardScaler()
-    avg_price_scaled = scaler.fit_transform(user_avg_price.values.reshape(-1, 1))
-    
-    # K-means clustering
-    kmeans = KMeans(n_clusters=n_clusters, random_state=42)
-    clusters = kmeans.fit_predict(avg_price_scaled)
-    
-    # Create results dataframe
-    user_price_clusters = pd.DataFrame({
-        'user_id': user_avg_price.index,
-        'avg_price': user_avg_price.values,
-        'cluster': clusters
-    })
-    
-    return user_price_clusters, kmeans
-
-def perform_price_event_clustering(data, n_clusters=4):
-    """Perform clustering based on price and event type"""
-    df_mix = data[['price', 'event_type']].copy()
-    
-    # One-hot encode event_type
-    encoder = OneHotEncoder(sparse_output=False)
-    event_encoded = encoder.fit_transform(df_mix[['event_type']])
-    event_columns = encoder.get_feature_names_out(['event_type'])
-    
-    # Combine price with encoded event_type
-    combined_df = pd.concat([
-        df_mix[['price']].reset_index(drop=True),
-        pd.DataFrame(event_encoded, columns=event_columns)
-    ], axis=1)
-    
-    # Scale all features
-    scaler = StandardScaler()
-    combined_scaled = scaler.fit_transform(combined_df)
-    
-    # K-means clustering
-    kmeans = KMeans(n_clusters=n_clusters, random_state=42)
-    clusters = kmeans.fit_predict(combined_scaled)
-    
-    df_mix['cluster'] = clusters
-    
-    return df_mix, kmeans, combined_scaled
-
-def perform_brand_event_clustering(data, n_clusters=8):
-    """Perform clustering based on brand and event type"""
-    df_mix = data[['brand', 'event_type']].copy()
-    
-    # One-hot encode both brand and event_type
-    encoder = OneHotEncoder(sparse_output=False)
-    encoded_features = encoder.fit_transform(df_mix[['brand', 'event_type']])
-    
-    # K-means clustering
-    kmeans = KMeans(n_clusters=n_clusters, random_state=42)
-    clusters = kmeans.fit_predict(encoded_features)
-    
-    df_mix['cluster'] = clusters
-    
-    return df_mix, kmeans, encoded_features
-
-def perform_advanced_clustering(data, n_clusters=10):
-    """Perform advanced clustering using multiple user behavior features"""
-    # Calculate user-level features
-    user_metrics = data.groupby('user_id').agg({
-        'event_type': ['count'],
-        'brand': 'nunique'
+def calculate_user_metrics(customer_data):
+    """Calculate user-level metrics for clustering"""
+    # Group by user_id and calculate metrics
+    user_metrics = customer_data.groupby('user_id').agg({
+        'event_type': ['count'],  # Total interactions (visit frequency)
+        'brand': 'nunique',       # Number of unique brands
+        'price': 'mean'          # Average price per user
     }).reset_index()
     
     # Flatten column names
-    user_metrics.columns = ['user_id', 'visit_frequency', 'brand_interactions']
+    user_metrics.columns = ['user_id', 'visit_frequency', 'brand_interactions', 'avg_price']
     
     # Calculate event type counts per user
-    event_counts = data.groupby(['user_id', 'event_type']).size().unstack(fill_value=0).reset_index()
+    event_counts = customer_data.groupby(['user_id', 'event_type']).size().unstack(fill_value=0).reset_index()
     
     # Merge with user metrics
     user_features = user_metrics.merge(event_counts, on='user_id', how='left')
     
-    # Calculate view-to-action ratio
+    # Calculate view-to-action ratio: (cart + purchase) / view
     user_features['view_to_action_ratio'] = np.where(
         user_features['view'] > 0,
         (user_features.get('cart', 0) + user_features.get('purchase', 0)) / user_features['view'],
         0
     )
     
-    # Prepare clustering features
-    clustering_features = user_features[['user_id', 'visit_frequency', 'view_to_action_ratio', 'brand_interactions']].copy()
-    
-    # Select features for clustering
-    X = clustering_features[['visit_frequency', 'view_to_action_ratio', 'brand_interactions']].copy()
+    return user_features
+
+def perform_clustering(features, n_clusters, feature_cols):
+    """Perform K-means clustering on selected features"""
+    X = features[feature_cols].copy()
     X = X.replace([np.inf, -np.inf], np.nan).fillna(0)
     
-    # Scale features
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
     
-    # K-means clustering
+    kmeans = KMeans(n_clusters=n_clusters, random_state=42)
+    clusters = kmeans.fit_predict(X_scaled)
+    
+    return clusters, scaler, kmeans
+
+def find_optimal_clusters(features, feature_cols, max_k=10):
+    """Find optimal number of clusters using elbow method and silhouette score"""
+    X = features[feature_cols].copy()
+    X = X.replace([np.inf, -np.inf], np.nan).fillna(0)
+    
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+    
+    k_range = range(2, max_k + 1)
+    inertias = []
+    silhouette_scores = []
+    
+    for k in k_range:
+        kmeans = KMeans(n_clusters=k, random_state=42)
+        clusters = kmeans.fit_predict(X_scaled)
+        inertias.append(kmeans.inertia_)
+        
+        if len(set(clusters)) > 1:
+            sil_score = silhouette_score(X_scaled, clusters, sample_size=min(10000, len(X_scaled)))
+            silhouette_scores.append(sil_score)
+        else:
+            silhouette_scores.append(0)
+    
+    return k_range, inertias, silhouette_scores
+
+def main():
+    # Header
+    st.markdown('<h1 class="main-header">🛒 E-Commerce Customer Segmentation Dashboard</h1>', unsafe_allow_html=True)
+    
+    # Load data
+    customer_data = load_data()
+    if customer_data is None:
+        st.stop()
+    
+    # Sidebar for navigation
+    st.sidebar.title("Navigation")
+    page = st.sidebar.selectbox(
+        "Choose Analysis",
+        ["Data Overview", "Visit-Based Clustering", "Price-Based Clustering", 
+         "Multi-Feature Clustering", "Advanced Behavior Analysis"]
+    )
+    
+    if page == "Data Overview":
+        data_overview(customer_data)
+    elif page == "Visit-Based Clustering":
+        visit_based_clustering(customer_data)
+    elif page == "Price-Based Clustering":
+        price_based_clustering(customer_data)
+    elif page == "Multi-Feature Clustering":
+        multi_feature_clustering(customer_data)
+    elif page == "Advanced Behavior Analysis":
+        advanced_behavior_analysis(customer_data)
+
+def data_overview(customer_data):
+    st.markdown('<h2 class="section-header">📊 Data Overview</h2>', unsafe_allow_html=True)
+    
+    # Basic statistics
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric("Total Records", f"{len(customer_data):,}")
+    with col2:
+        st.metric("Unique Users", f"{customer_data['user_id'].nunique():,}")
+    with col3:
+        st.metric("Unique Products", f"{customer_data['product_id'].nunique():,}")
+    with col4:
+        st.metric("Unique Brands", f"{customer_data['brand'].nunique():,}")
+    
+    # Data sample
+    st.subheader("Data Sample")
+    st.dataframe(customer_data.head(10))
+    
+    # Basic distributions
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("Price Distribution")
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.hist(customer_data['price'], bins=30, edgecolor='black', alpha=0.7, color='skyblue')
+        ax.set_xlabel('Price')
+        ax.set_ylabel('Frequency')
+        ax.set_title('Distribution of Price')
+        ax.grid(True, alpha=0.3)
+        st.pyplot(fig)
+    
+    with col2:
+        st.subheader("Event Type Distribution")
+        event_counts = customer_data['event_type'].value_counts()
+        fig = px.pie(values=event_counts.values, names=event_counts.index, 
+                     title="Distribution of Event Types")
+        st.plotly_chart(fig, use_container_width=True)
+    
+    # User visit frequency
+    st.subheader("User Visit Frequency Analysis")
+    user_visit_counts = customer_data.groupby('user_id').size()
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.write("**Visit Statistics:**")
+        st.write(f"- Average visits per user: {user_visit_counts.mean():.2f}")
+        st.write(f"- Median visits per user: {user_visit_counts.median():.2f}")
+        st.write(f"- Max visits by a user: {user_visit_counts.max()}")
+        st.write(f"- Min visits by a user: {user_visit_counts.min()}")
+    
+    with col2:
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.hist(user_visit_counts, bins=50, edgecolor='black', alpha=0.7, color='lightgreen')
+        ax.set_xlabel('Number of Visits per User')
+        ax.set_ylabel('Count of Users')
+        ax.set_title('Distribution of User Visit Frequency')
+        ax.grid(True, alpha=0.3)
+        st.pyplot(fig)
+
+def visit_based_clustering(customer_data):
+    st.markdown('<h2 class="section-header">👥 Visit-Based Customer Clustering</h2>', unsafe_allow_html=True)
+    
+    # Calculate user visit counts
+    user_visit_counts = customer_data.groupby('user_id').size()
+    
+    # Sidebar controls
+    st.sidebar.subheader("Clustering Parameters")
+    n_clusters = st.sidebar.slider("Number of Clusters", 2, 10, 4)
+    
+    # Perform clustering
+    visit_data = pd.DataFrame({
+        'user_id': user_visit_counts.index,
+        'visit_count': user_visit_counts.values
+    })
+    
+    clusters, scaler, kmeans = perform_clustering(visit_data, n_clusters, ['visit_count'])
+    visit_data['cluster'] = clusters
+    
+    # Display results
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("Cluster Distribution")
+        cluster_counts = visit_data['cluster'].value_counts().sort_index()
+        fig = px.bar(x=cluster_counts.index, y=cluster_counts.values,
+                     labels={'x': 'Cluster', 'y': 'Number of Users'},
+                     title="Users per Cluster")
+        st.plotly_chart(fig, use_container_width=True)
+    
+    with col2:
+        st.subheader("Cluster Analysis")
+        cluster_analysis = visit_data.groupby('cluster')['visit_count'].describe()
+        st.dataframe(cluster_analysis)
+    
+    # Visualization
+    st.subheader("Cluster Visualization")
+    fig = px.scatter(visit_data, x=visit_data.index, y='visit_count', 
+                     color='cluster', title="User Clusters Based on Visit Frequency",
+                     labels={'x': 'User Index', 'y': 'Visit Count'})
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # Optimal clusters analysis
+    st.subheader("Optimal Number of Clusters Analysis")
+    k_range, inertias, silhouette_scores = find_optimal_clusters(visit_data, ['visit_count'])
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        fig = px.line(x=k_range, y=inertias, markers=True,
+                      labels={'x': 'Number of Clusters (k)', 'y': 'Inertia'},
+                      title="Elbow Method")
+        st.plotly_chart(fig, use_container_width=True)
+    
+    with col2:
+        fig = px.line(x=k_range, y=silhouette_scores, markers=True,
+                      labels={'x': 'Number of Clusters (k)', 'y': 'Silhouette Score'},
+                      title="Silhouette Analysis")
+        st.plotly_chart(fig, use_container_width=True)
+
+def price_based_clustering(customer_data):
+    st.markdown('<h2 class="section-header">💰 Price-Based Customer Clustering</h2>', unsafe_allow_html=True)
+    
+    # Calculate average price per user
+    user_avg_price = customer_data.groupby('user_id')['price'].mean()
+    
+    # Sidebar controls
+    st.sidebar.subheader("Clustering Parameters")
+    n_clusters = st.sidebar.slider("Number of Clusters", 2, 10, 4, key="price_clusters")
+    
+    # Perform clustering
+    price_data = pd.DataFrame({
+        'user_id': user_avg_price.index,
+        'avg_price': user_avg_price.values
+    })
+    
+    clusters, scaler, kmeans = perform_clustering(price_data, n_clusters, ['avg_price'])
+    price_data['cluster'] = clusters
+    
+    # Display basic statistics
+    st.subheader("Price Statistics")
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric("Mean Price", f"${user_avg_price.mean():.2f}")
+    with col2:
+        st.metric("Median Price", f"${user_avg_price.median():.2f}")
+    with col3:
+        st.metric("Max Price", f"${user_avg_price.max():.2f}")
+    with col4:
+        st.metric("Min Price", f"${user_avg_price.min():.2f}")
+    
+    # Cluster analysis
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("Cluster Distribution")
+        cluster_counts = price_data['cluster'].value_counts().sort_index()
+        fig = px.bar(x=cluster_counts.index, y=cluster_counts.values,
+                     labels={'x': 'Cluster', 'y': 'Number of Users'},
+                     title="Users per Price Cluster")
+        st.plotly_chart(fig, use_container_width=True)
+    
+    with col2:
+        st.subheader("Price Cluster Analysis")
+        cluster_analysis = price_data.groupby('cluster')['avg_price'].describe()
+        st.dataframe(cluster_analysis)
+    
+    # Visualizations
+    st.subheader("Price Cluster Visualizations")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        fig = px.scatter(price_data, x=price_data.index, y='avg_price', 
+                         color='cluster', title="User Clusters Based on Average Price",
+                         labels={'x': 'User Index', 'y': 'Average Price ($)'})
+        st.plotly_chart(fig, use_container_width=True)
+    
+    with col2:
+        fig = px.box(price_data, x='cluster', y='avg_price',
+                     title="Price Distribution by Cluster",
+                     labels={'cluster': 'Cluster', 'avg_price': 'Average Price ($)'})
+        st.plotly_chart(fig, use_container_width=True)
+    
+    # Optimal clusters analysis
+    st.subheader("Optimal Number of Clusters Analysis")
+    k_range, inertias, silhouette_scores = find_optimal_clusters(price_data, ['avg_price'])
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        fig = px.line(x=k_range, y=inertias, markers=True,
+                      labels={'x': 'Number of Clusters (k)', 'y': 'Inertia'},
+                      title="Elbow Method for Price Clustering")
+        st.plotly_chart(fig, use_container_width=True)
+    
+    with col2:
+        fig = px.line(x=k_range, y=silhouette_scores, markers=True,
+                      labels={'x': 'Number of Clusters (k)', 'y': 'Silhouette Score'},
+                      title="Silhouette Analysis for Price Clustering")
+        st.plotly_chart(fig, use_container_width=True)
+
+def multi_feature_clustering(customer_data):
+    st.markdown('<h2 class="section-header">🎯 Multi-Feature Clustering</h2>', unsafe_allow_html=True)
+    
+    # Sidebar controls
+    st.sidebar.subheader("Feature Selection")
+    use_price = st.sidebar.checkbox("Include Price", True)
+    use_event_type = st.sidebar.checkbox("Include Event Type", True)
+    use_brand = st.sidebar.checkbox("Include Brand", False)
+    
+    n_clusters = st.sidebar.slider("Number of Clusters", 2, 10, 4, key="multi_clusters")
+    
+    # Prepare features based on selection
+    features_to_use = []
+    if use_price:
+        features_to_use.append('price')
+    if use_event_type:
+        features_to_use.append('event_type')
+    if use_brand:
+        features_to_use.append('brand')
+    
+    if not features_to_use:
+        st.warning("Please select at least one feature for clustering.")
+        return
+    
+    # Prepare data
+    df_mix = customer_data[features_to_use].copy()
+    
+    # Handle categorical variables
+    categorical_features = [f for f in features_to_use if f in ['event_type', 'brand']]
+    numerical_features = [f for f in features_to_use if f not in categorical_features]
+    
+    if categorical_features:
+        # One-hot encode categorical features
+        encoder = OneHotEncoder(sparse_output=False)
+        encoded_features = encoder.fit_transform(df_mix[categorical_features])
+        encoded_columns = encoder.get_feature_names_out(categorical_features)
+        
+        # Combine with numerical features
+        if numerical_features:
+            combined_df = pd.concat([
+                df_mix[numerical_features].reset_index(drop=True),
+                pd.DataFrame(encoded_features, columns=encoded_columns)
+            ], axis=1)
+        else:
+            combined_df = pd.DataFrame(encoded_features, columns=encoded_columns)
+    else:
+        combined_df = df_mix[numerical_features]
+    
+    # Scale features if needed
+    if numerical_features:
+        scaler = StandardScaler()
+        combined_scaled = scaler.fit_transform(combined_df)
+    else:
+        combined_scaled = combined_df.values
+    
+    # Perform clustering
+    kmeans = KMeans(n_clusters=n_clusters, random_state=42)
+    clusters = kmeans.fit_predict(combined_scaled)
+    
+    df_mix['cluster'] = clusters
+    
+    # Display results
+    st.subheader(f"Clustering Results using: {', '.join(features_to_use)}")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("Cluster Distribution")
+        cluster_counts = pd.Series(clusters).value_counts().sort_index()
+        fig = px.bar(x=cluster_counts.index, y=cluster_counts.values,
+                     labels={'x': 'Cluster', 'y': 'Number of Records'},
+                     title="Records per Cluster")
+        st.plotly_chart(fig, use_container_width=True)
+    
+    with col2:
+        st.subheader("Cluster Composition")
+        if 'price' in features_to_use and 'event_type' in features_to_use:
+            composition = df_mix.groupby('cluster').agg({
+                'price': 'mean' if 'price' in features_to_use else lambda x: 'N/A',
+                'event_type': lambda x: x.value_counts().index[0] if 'event_type' in features_to_use else 'N/A'
+            })
+            st.dataframe(composition)
+    
+    # Elbow method for optimal clusters
+    if st.button("Find Optimal Number of Clusters"):
+        st.subheader("Optimal Clusters Analysis")
+        
+        k_range = range(2, 11)
+        inertias = []
+        
+        for k in k_range:
+            km = KMeans(n_clusters=k, random_state=42)
+            km.fit(combined_scaled)
+            inertias.append(km.inertia_)
+        
+        fig = px.line(x=k_range, y=inertias, markers=True,
+                      labels={'x': 'Number of Clusters (k)', 'y': 'Inertia'},
+                      title=f"Elbow Method for {', '.join(features_to_use)}")
+        st.plotly_chart(fig, use_container_width=True)
+
+def advanced_behavior_analysis(customer_data):
+    st.markdown('<h2 class="section-header">🧠 Advanced User Behavior Analysis</h2>', unsafe_allow_html=True)
+    
+    # Calculate comprehensive user features
+    user_features = calculate_user_metrics(customer_data)
+    
+    # Sidebar controls
+    st.sidebar.subheader("Advanced Clustering Parameters")
+    n_clusters = st.sidebar.slider("Number of Clusters", 2, 15, 10, key="advanced_clusters")
+    
+    feature_options = ['visit_frequency', 'view_to_action_ratio', 'brand_interactions', 'avg_price']
+    selected_features = st.sidebar.multiselect(
+        "Select Features for Clustering",
+        feature_options,
+        default=['visit_frequency', 'view_to_action_ratio', 'brand_interactions']
+    )
+    
+    if not selected_features:
+        st.warning("Please select at least one feature for clustering.")
+        return
+    
+    # Display feature distributions
+    st.subheader("Feature Distributions")
+    
+    n_features = len(selected_features)
+    cols = st.columns(min(n_features, 3))
+    
+    for i, feature in enumerate(selected_features):
+        with cols[i % 3]:
+            fig, ax = plt.subplots(figsize=(8, 6))
+            ax.hist(user_features[feature], bins=30, edgecolor='black', alpha=0.7)
+            ax.set_xlabel(feature.replace('_', ' ').title())
+            ax.set_ylabel('Number of Users')
+            ax.set_title(f'Distribution of {feature.replace("_", " ").title()}')
+            ax.grid(True, alpha=0.3)
+            st.pyplot(fig)
+    
+    # Perform clustering
+    clustering_features = user_features[['user_id'] + selected_features].copy()
+    
+    # Prepare data for clustering
+    X = clustering_features[selected_features].copy()
+    X = X.replace([np.inf, -np.inf], np.nan).fillna(0)
+    
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+    
+    # Clustering
     kmeans = KMeans(n_clusters=n_clusters, random_state=42)
     clusters = kmeans.fit_predict(X_scaled)
     
     clustering_features['cluster'] = clusters
     
-    return clustering_features, kmeans, X_scaled
-
-def calculate_elbow_method(X_scaled, max_k=15):
-    """Calculate inertia values for elbow method"""
-    k_range = range(2, max_k + 1)
-    inertias = []
+    # Display clustering results
+    st.subheader("Clustering Results")
     
-    for k in k_range:
-        kmeans = KMeans(n_clusters=k, random_state=42)
-        kmeans.fit(X_scaled)
-        inertias.append(kmeans.inertia_)
+    col1, col2 = st.columns(2)
     
-    return k_range, inertias
-
-def plot_elbow_curve(k_range, inertias):
-    """Plot elbow curve using plotly"""
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=list(k_range),
-        y=inertias,
-        mode='lines+markers',
-        name='Inertia',
-        line=dict(color='#1f77b4', width=3),
-        marker=dict(size=8)
-    ))
+    with col1:
+        st.subheader("Cluster Distribution")
+        cluster_counts = clustering_features['cluster'].value_counts().sort_index()
+        fig = px.bar(x=cluster_counts.index, y=cluster_counts.values,
+                     labels={'x': 'Cluster', 'y': 'Number of Users'},
+                     title="Users per Cluster")
+        st.plotly_chart(fig, use_container_width=True)
     
-    fig.update_layout(
-        title='Elbow Method for Optimal Number of Clusters',
-        xaxis_title='Number of Clusters (k)',
-        yaxis_title='Inertia',
-        template='plotly_white',
-        height=400
-    )
+    with col2:
+        st.subheader("Feature Correlations")
+        corr_matrix = clustering_features[selected_features].corr()
+        fig = px.imshow(corr_matrix, text_auto=True, aspect="auto",
+                        title="Feature Correlation Matrix")
+        st.plotly_chart(fig, use_container_width=True)
     
-    return fig
-
-def plot_cluster_distribution(clusters_df, cluster_col='cluster', title="Cluster Distribution"):
-    """Plot cluster distribution using plotly"""
-    cluster_counts = clusters_df[cluster_col].value_counts().sort_index()
+    # Detailed cluster analysis
+    st.subheader("Detailed Cluster Analysis")
     
-    fig = go.Figure(data=[
-        go.Bar(x=cluster_counts.index, y=cluster_counts.values,
-               marker_color='#1f77b4')
-    ])
+    cluster_analysis = clustering_features.groupby('cluster')[selected_features].agg(['mean', 'std']).round(3)
+    st.dataframe(cluster_analysis)
     
-    fig.update_layout(
-        title=title,
-        xaxis_title='Cluster',
-        yaxis_title='Number of Users/Records',
-        template='plotly_white',
-        height=400
-    )
+    # Cluster profiles
+    st.subheader("Cluster Profiles")
     
-    return fig
-
-def plot_feature_histograms(data, features):
-    """Plot histograms for multiple features"""
-    fig = make_subplots(
-        rows=1, cols=len(features),
-        subplot_titles=features
-    )
-    
-    for i, feature in enumerate(features):
-        fig.add_trace(
-            go.Histogram(x=data[feature], name=feature, showlegend=False),
-            row=1, col=i+1
-        )
-    
-    fig.update_layout(
-        title='Distribution of Features',
-        template='plotly_white',
-        height=400
-    )
-    
-    return fig
-
-def plot_cluster_analysis(clusters_df, features, cluster_col='cluster'):
-    """Plot cluster analysis for multiple features"""
-    n_features = len(features)
-    fig = make_subplots(
-        rows=1, cols=n_features,
-        subplot_titles=features
-    )
-    
-    for i, feature in enumerate(features):
-        for cluster in sorted(clusters_df[cluster_col].unique()):
-            cluster_data = clusters_df[clusters_df[cluster_col] == cluster]
-            fig.add_trace(
-                go.Box(y=cluster_data[feature], name=f'Cluster {cluster}', 
-                      showlegend=(i == 0)),
-                row=1, col=i+1
-            )
-    
-    fig.update_layout(
-        title='Cluster Analysis by Features',
-        template='plotly_white',
-        height=500
-    )
-    
-    return fig
-
-def main():
-    # Main title
-    st.markdown('<h1 class="main-header">📊 Customer Segmentation Analysis</h1>', unsafe_allow_html=True)
-    
-    # Sidebar for navigation
-    st.sidebar.title("Navigation")
-    page = st.sidebar.selectbox(
-        "Choose Analysis Type",
-        ["Data Overview", "Visit-Based Clustering", "Price-Based Clustering", 
-         "Price-Event Clustering", "Brand-Event Clustering", "Advanced Clustering"]
-    )
-    
-    # Load data
-    data = load_and_preprocess_data()
-    
-    if data is None:
-        st.error("Could not load data. Please ensure the data file exists in the correct location.")
-        st.info("Expected location: ../mytestdata.parquet")
+    for cluster_id in sorted(clustering_features['cluster'].unique()):
+        cluster_data = clustering_features[clustering_features['cluster'] == cluster_id]
+        size = len(cluster_data)
         
-        # Allow file upload as fallback
-        st.markdown("### Upload Data File")
-        uploaded_file = st.file_uploader("Choose a file", type=['csv', 'parquet'])
+        # Calculate averages for profiling
+        profile_metrics = {}
+        for feature in selected_features:
+            profile_metrics[feature] = cluster_data[feature].mean()
         
-        if uploaded_file is not None:
-            if uploaded_file.name.endswith('.csv'):
-                data = pd.read_csv(uploaded_file)
+        # Create profile description
+        profile_parts = []
+        
+        if 'visit_frequency' in selected_features:
+            avg_visits = profile_metrics['visit_frequency']
+            visit_level = "High" if avg_visits > clustering_features['visit_frequency'].median() else "Low"
+            profile_parts.append(f"{visit_level} Activity")
+        
+        if 'view_to_action_ratio' in selected_features:
+            avg_ratio = profile_metrics['view_to_action_ratio']
+            engagement = "High Conversion" if avg_ratio > clustering_features['view_to_action_ratio'].median() else "Low Conversion"
+            profile_parts.append(engagement)
+        
+        if 'brand_interactions' in selected_features:
+            avg_brands = profile_metrics['brand_interactions']
+            brand_behavior = "Multi-Brand" if avg_brands > clustering_features['brand_interactions'].median() else "Single-Brand"
+            profile_parts.append(brand_behavior)
+        
+        if 'avg_price' in selected_features:
+            avg_price_val = profile_metrics['avg_price']
+            price_level = "High Value" if avg_price_val > clustering_features['avg_price'].median() else "Low Value"
+            profile_parts.append(price_level)
+        
+        profile = ", ".join(profile_parts)
+        
+        # Display cluster profile
+        st.markdown(f"""
+        <div class="cluster-profile">
+            <h4>Cluster {cluster_id} ({size:,} users)</h4>
+            <p><strong>Profile:</strong> {profile}</p>
+            <ul>
+        """, unsafe_allow_html=True)
+        
+        for feature in selected_features:
+            value = profile_metrics[feature]
+            if feature == 'avg_price':
+                st.markdown(f"<li>{feature.replace('_', ' ').title()}: ${value:.2f}</li>", unsafe_allow_html=True)
             else:
-                data = pd.read_parquet(uploaded_file)
-        else:
-            st.stop()
-    
-    # Preprocess data
-    data = preprocess_data(data)
-    
-    if page == "Data Overview":
-        st.markdown('<h2 class="section-header">📈 Data Overview</h2>', unsafe_allow_html=True)
+                st.markdown(f"<li>{feature.replace('_', ' ').title()}: {value:.3f}</li>", unsafe_allow_html=True)
         
-        # Display basic statistics
-        col1, col2, col3, col4 = st.columns(4)
+        st.markdown("</ul></div>", unsafe_allow_html=True)
+    
+    # Optimal clusters analysis
+    if st.button("Find Optimal Number of Clusters", key="advanced_optimal"):
+        st.subheader("Optimal Clusters Analysis")
+        k_range, inertias, silhouette_scores = find_optimal_clusters(clustering_features, selected_features, max_k=15)
+        
+        col1, col2 = st.columns(2)
         
         with col1:
-            st.metric("Total Records", f"{len(data):,}")
+            fig = px.line(x=k_range, y=inertias, markers=True,
+                          labels={'x': 'Number of Clusters (k)', 'y': 'Inertia'},
+                          title="Elbow Method")
+            st.plotly_chart(fig, use_container_width=True)
+        
         with col2:
-            st.metric("Unique Users", f"{data['user_id'].nunique():,}")
-        with col3:
-            st.metric("Unique Products", f"{data['product_id'].nunique():,}")
-        with col4:
-            st.metric("Unique Brands", f"{data['brand'].nunique():,}")
+            fig = px.line(x=k_range, y=silhouette_scores, markers=True,
+                          labels={'x': 'Number of Clusters (k)', 'y': 'Silhouette Score'},
+                          title="Silhouette Analysis")
+            st.plotly_chart(fig, use_container_width=True)
         
-        # Show data sample
-        st.subheader("Data Sample")
-        st.dataframe(data.head(10))
-        
-        # Show data statistics
-        st.subheader("Data Statistics")
-        st.dataframe(data.describe())
-        
-        # Event type distribution
-        st.subheader("Event Type Distribution")
-        event_counts = data['event_type'].value_counts()
-        fig = go.Figure(data=[go.Pie(labels=event_counts.index, values=event_counts.values)])
-        fig.update_layout(title="Distribution of Event Types")
-        st.plotly_chart(fig, use_container_width=True)
-        
-        # Price distribution
-        st.subheader("Price Distribution")
-        fig = go.Figure(data=[go.Histogram(x=data['price'], nbinsx=50)])
-        fig.update_layout(title="Distribution of Prices", xaxis_title="Price", yaxis_title="Frequency")
-        st.plotly_chart(fig, use_container_width=True)
-    
-    elif page == "Visit-Based Clustering":
-        st.markdown('<h2 class="section-header">👥 Visit-Based Clustering</h2>', unsafe_allow_html=True)
-        
-        # Clustering parameters
-        n_clusters = st.sidebar.slider("Number of Clusters", 2, 10, 4)
-        
-        if st.button("Run Visit-Based Clustering"):
-            with st.spinner("Performing visit-based clustering..."):
-                user_clusters, kmeans = perform_visit_clustering(data, n_clusters)
-                
-                # Display results
-                st.success("Clustering completed!")
-                
-                # Cluster distribution
-                st.subheader("Cluster Distribution")
-                fig = plot_cluster_distribution(user_clusters, 'cluster', "Visit-Based Cluster Distribution")
-                st.plotly_chart(fig, use_container_width=True)
-                
-                # Cluster analysis
-                st.subheader("Cluster Analysis")
-                cluster_stats = user_clusters.groupby('cluster')['visit_count'].describe()
-                st.dataframe(cluster_stats)
-                
-                # Visit count distribution by cluster
-                st.subheader("Visit Count Distribution by Cluster")
-                fig = plot_cluster_analysis(user_clusters, ['visit_count'], 'cluster')
-                st.plotly_chart(fig, use_container_width=True)
-    
-    elif page == "Price-Based Clustering":
-        st.markdown('<h2 class="section-header">💰 Price-Based Clustering</h2>', unsafe_allow_html=True)
-        
-        n_clusters = st.sidebar.slider("Number of Clusters", 2, 10, 4)
-        show_elbow = st.sidebar.checkbox("Show Elbow Method")
-        
-        if st.button("Run Price-Based Clustering"):
-            with st.spinner("Performing price-based clustering..."):
-                user_price_clusters, kmeans = perform_price_clustering(data, n_clusters)
-                
-                st.success("Clustering completed!")
-                
-                # Cluster distribution
-                st.subheader("Cluster Distribution")
-                fig = plot_cluster_distribution(user_price_clusters, 'cluster', "Price-Based Cluster Distribution")
-                st.plotly_chart(fig, use_container_width=True)
-                
-                # Cluster analysis
-                st.subheader("Cluster Analysis")
-                cluster_stats = user_price_clusters.groupby('cluster')['avg_price'].describe()
-                st.dataframe(cluster_stats)
-                
-                # Price distribution by cluster
-                st.subheader("Price Distribution by Cluster")
-                fig = plot_cluster_analysis(user_price_clusters, ['avg_price'], 'cluster')
-                st.plotly_chart(fig, use_container_width=True)
-                
-                if show_elbow:
-                    st.subheader("Elbow Method Analysis")
-                    user_avg_price = data.groupby('user_id')['price'].mean()
-                    scaler = StandardScaler()
-                    avg_price_scaled = scaler.fit_transform(user_avg_price.values.reshape(-1, 1))
-                    
-                    k_range, inertias = calculate_elbow_method(avg_price_scaled)
-                    fig = plot_elbow_curve(k_range, inertias)
-                    st.plotly_chart(fig, use_container_width=True)
-    
-    elif page == "Price-Event Clustering":
-        st.markdown('<h2 class="section-header">🏷️ Price-Event Clustering</h2>', unsafe_allow_html=True)
-        
-        n_clusters = st.sidebar.slider("Number of Clusters", 2, 10, 4)
-        
-        if st.button("Run Price-Event Clustering"):
-            with st.spinner("Performing price-event clustering..."):
-                df_mix, kmeans, combined_scaled = perform_price_event_clustering(data, n_clusters)
-                
-                st.success("Clustering completed!")
-                
-                # Cluster distribution
-                st.subheader("Cluster Distribution")
-                fig = plot_cluster_distribution(df_mix, 'cluster', "Price-Event Cluster Distribution")
-                st.plotly_chart(fig, use_container_width=True)
-                
-                # Cluster composition
-                st.subheader("Cluster Composition")
-                cluster_composition = df_mix.groupby('cluster').agg({
-                    'price': 'mean',
-                    'event_type': lambda x: x.value_counts().index[0]
-                })
-                st.dataframe(cluster_composition)
-                
-                # Elbow method
-                st.subheader("Elbow Method Analysis")
-                k_range, inertias = calculate_elbow_method(combined_scaled)
-                fig = plot_elbow_curve(k_range, inertias)
-                st.plotly_chart(fig, use_container_width=True)
-    
-    elif page == "Brand-Event Clustering":
-        st.markdown('<h2 class="section-header">🏢 Brand-Event Clustering</h2>', unsafe_allow_html=True)
-        
-        n_clusters = st.sidebar.slider("Number of Clusters", 2, 15, 8)
-        
-        if st.button("Run Brand-Event Clustering"):
-            with st.spinner("Performing brand-event clustering..."):
-                df_mix, kmeans, encoded_features = perform_brand_event_clustering(data, n_clusters)
-                
-                st.success("Clustering completed!")
-                
-                # Cluster distribution
-                st.subheader("Cluster Distribution")
-                fig = plot_cluster_distribution(df_mix, 'cluster', "Brand-Event Cluster Distribution")
-                st.plotly_chart(fig, use_container_width=True)
-                
-                # Cluster composition
-                st.subheader("Cluster Composition")
-                cluster_composition = df_mix.groupby('cluster').agg({
-                    'brand': lambda x: x.value_counts().index[0],
-                    'event_type': lambda x: x.value_counts().index[0]
-                })
-                st.dataframe(cluster_composition)
-                
-                # Elbow method
-                st.subheader("Elbow Method Analysis")
-                k_range, inertias = calculate_elbow_method(encoded_features)
-                fig = plot_elbow_curve(k_range, inertias)
-                st.plotly_chart(fig, use_container_width=True)
-    
-    elif page == "Advanced Clustering":
-        st.markdown('<h2 class="section-header">🚀 Advanced User Behavior Clustering</h2>', unsafe_allow_html=True)
-        
-        st.info("This clustering approach uses visit frequency, view-to-action ratio, and brand interactions to create comprehensive user segments.")
-        
-        n_clusters = st.sidebar.slider("Number of Clusters", 2, 20, 10)
-        show_elbow = st.sidebar.checkbox("Show Elbow Method", value=True)
-        
-        if st.button("Run Advanced Clustering"):
-            with st.spinner("Performing advanced clustering analysis..."):
-                clustering_features, kmeans, X_scaled = perform_advanced_clustering(data, n_clusters)
-                
-                st.success("Advanced clustering completed!")
-                
-                # Display feature distributions
-                st.subheader("Feature Distributions")
-                features = ['visit_frequency', 'view_to_action_ratio', 'brand_interactions']
-                fig = plot_feature_histograms(clustering_features, features)
-                st.plotly_chart(fig, use_container_width=True)
-                
-                # Feature correlation
-                st.subheader("Feature Correlations")
-                correlation_matrix = clustering_features[features].corr()
-                fig = go.Figure(data=go.Heatmap(
-                    z=correlation_matrix.values,
-                    x=correlation_matrix.columns,
-                    y=correlation_matrix.index,
-                    colorscale='RdBu',
-                    text=correlation_matrix.round(3).values,
-                    texttemplate="%{text}",
-                    textfont={"size": 12}
-                ))
-                fig.update_layout(title="Feature Correlation Matrix", height=400)
-                st.plotly_chart(fig, use_container_width=True)
-                
-                if show_elbow:
-                    st.subheader("Elbow Method Analysis")
-                    k_range, inertias = calculate_elbow_method(X_scaled, 20)
-                    fig = plot_elbow_curve(k_range, inertias)
-                    st.plotly_chart(fig, use_container_width=True)
-                
-                # Cluster distribution
-                st.subheader("Cluster Distribution")
-                fig = plot_cluster_distribution(clustering_features, 'cluster', "Advanced Cluster Distribution")
-                st.plotly_chart(fig, use_container_width=True)
-                
-                # Cluster analysis
-                st.subheader("Cluster Analysis by Features")
-                fig = plot_cluster_analysis(clustering_features, features, 'cluster')
-                st.plotly_chart(fig, use_container_width=True)
-                
-                # Detailed cluster profiles
-                st.subheader("Detailed Cluster Profiles")
-                
-                cluster_analysis = clustering_features.groupby('cluster').agg({
-                    'visit_frequency': ['mean', 'std', 'min', 'max'],
-                    'view_to_action_ratio': ['mean', 'std', 'min', 'max'],
-                    'brand_interactions': ['mean', 'std', 'min', 'max']
-                }).round(3)
-                
-                st.dataframe(cluster_analysis)
-                
-                # Business insights
-                st.subheader("🎯 Business Insights")
-                
-                median_visits = clustering_features['visit_frequency'].median()
-                median_ratio = clustering_features['view_to_action_ratio'].median()
-                median_brands = clustering_features['brand_interactions'].median()
-                
-                for cluster_id in sorted(clustering_features['cluster'].unique()):
-                    cluster_data = clustering_features[clustering_features['cluster'] == cluster_id]
-                    
-                    avg_visits = cluster_data['visit_frequency'].mean()
-                    avg_ratio = cluster_data['view_to_action_ratio'].mean()
-                    avg_brands = cluster_data['brand_interactions'].mean()
-                    size = len(cluster_data)
-                    
-                    # Create profile name
-                    visit_level = "High" if avg_visits > median_visits else "Low"
-                    engagement = "High Conversion" if avg_ratio > median_ratio else "Low Conversion"
-                    brand_behavior = "Multi-Brand" if avg_brands > median_brands else "Single-Brand"
-                    
-                    profile = f"{visit_level} Activity, {engagement}, {brand_behavior}"
-                    
-                    with st.expander(f"🎯 Cluster {cluster_id}: {profile} ({size:,} users)"):
-                        col1, col2, col3 = st.columns(3)
-                        
-                        with col1:
-                            st.metric("Avg Visits", f"{avg_visits:.1f}")
-                        with col2:
-                            st.metric("Avg Conversion Ratio", f"{avg_ratio:.3f}")
-                        with col3:
-                            st.metric("Avg Brand Interactions", f"{avg_brands:.1f}")
-                        
-                        # Business recommendations
-                        st.markdown("**💡 Business Recommendations:**")
-                        
-                        if visit_level == "High" and engagement == "High Conversion":
-                            st.markdown("- 🌟 **VIP Customers**: Focus on retention and premium offerings")
-                            st.markdown("- 📧 Personalized email campaigns with exclusive deals")
-                            st.markdown("- 🎁 Loyalty program benefits and early access")
-                        elif visit_level == "High" and engagement == "Low Conversion":
-                            st.markdown("- 🔍 **High Browsers**: Need conversion optimization")
-                            st.markdown("- 💰 Targeted discounts and limited-time offers")
-                            st.markdown("- 📱 Retargeting campaigns and cart abandonment emails")
-                        elif visit_level == "Low" and engagement == "High Conversion":
-                            st.markdown("- 🎯 **Efficient Buyers**: Focus on acquisition")
-                            st.markdown("- 📈 Increase visit frequency through engagement")
-                            st.markdown("- 🔔 Push notifications for new products")
-                        else:
-                            st.markdown("- 📢 **Need Attention**: Requires activation campaigns")
-                            st.markdown("- 🎁 Welcome series and onboarding improvements")
-                            st.markdown("- 💌 Re-engagement campaigns with incentives")
+        # Recommendations
+        optimal_k_silhouette = k_range[silhouette_scores.index(max(silhouette_scores))]
+        st.success(f"Recommended number of clusters based on Silhouette Score: **{optimal_k_silhouette}**")
 
 if __name__ == "__main__":
     main()
