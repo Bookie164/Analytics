@@ -58,6 +58,12 @@ def load_data():
         # Try to load the data
         data_path = 'https://drive.google.com/file/d/1mdu2tYaGP-LWwl5kT7QSGy6dk3PYRNBI/view?usp=share_link'
         customer_data = pd.read_parquet(data_path)
+
+file_id = "1mdu2tYaGP-LWwl5kT7QSGy6dk3PYRNBI"
+data_path = f"https://drive.google.com/uc?id={file_id}"
+
+customer_data = pd.read_parquet(data_path, engine='pyarrow')
+print(customer_data.head())
         
         # Data preprocessing
         def fill_missing_brand(group):
